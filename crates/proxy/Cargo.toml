@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 bytes.workspace = true
+http-body.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }

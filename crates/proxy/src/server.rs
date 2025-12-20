@@ -5,18 +5,24 @@ use crate::errors::{ProxyBody, ProxyError};
 use crate::http_proxy::handle_http;
 use crate::obs::init_tracing;
 use crate::policy::PolicyEngine;
+use bytes::Bytes;
+use http_body::{Body, Frame, SizeHint};
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioIo;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::time::Duration;
 use tracing::Instrument;
 use uuid::Uuid;
+use std::time::Instant;
 
 #[derive(Clone)]
 struct AppState {
@@ -98,6 +104,7 @@ async fn handle_request(
     state: AppState,
 ) -> Result<Response<ProxyBody>, Infallible> {
     let request_id = Uuid::new_v4().to_string();
+    let start = Instant::now();
     let method = req.method().clone();
     let uri = req.uri().to_string();
     let cache_name = state.cache.name();
@@ -130,9 +137,9 @@ async fn handle_request(
         match result {
             Ok(response) => {
                 let status = response.status();
-                tracing::info!(status = %status, "request completed");
-                tracing::debug!(headers = ?response.headers(), "response details");
-                response
+                tracing::debug!(status = %status, headers = ?response.headers(), "response details");
+                let span = tracing::Span::current();
+                response.map(|body| TimedBody::new(body, start, status, span).boxed())
             }
             Err(err) => {
                 tracing::warn!(error = %err, "request failed");
@@ -144,4 +151,95 @@ async fn handle_request(
     .await;
 
     Ok(response)
+}
+
+struct TimedBody<B> {
+    inner: B,
+    start: Instant,
+    ttfb: Option<Duration>,
+    bytes: u64,
+    status: hyper::StatusCode,
+    span: tracing::Span,
+    logged: bool,
+}
+
+impl<B> TimedBody<B> {
+    fn new(inner: B, start: Instant, status: hyper::StatusCode, span: tracing::Span) -> Self {
+        Self {
+            inner,
+            start,
+            ttfb: None,
+            bytes: 0,
+            status,
+            span,
+            logged: false,
+        }
+    }
+
+    fn note_first_byte(&mut self) {
+        if self.ttfb.is_none() {
+            self.ttfb = Some(self.start.elapsed());
+        }
+    }
+
+    fn log_complete(&mut self) {
+        if self.logged {
+            return;
+        }
+        self.logged = true;
+        let duration_ms = self.start.elapsed().as_millis();
+        let ttfb_ms = self.ttfb.map(|d| d.as_millis());
+        let bytes = self.bytes;
+        let status = self.status;
+        self.span.in_scope(|| {
+            tracing::info!(
+                status = %status,
+                duration_ms = duration_ms,
+                ttfb_ms = ?ttfb_ms,
+                bytes = bytes,
+                "request completed"
+            );
+        });
+    }
+}
+
+impl<B> Body for TimedBody<B>
+where
+    B: Body<Data = Bytes, Error = ProxyError> + Unpin,
+{
+    type Data = Bytes;
+    type Error = ProxyError;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        let poll = Pin::new(&mut self.inner).poll_frame(cx);
+        match poll {
+            Poll::Ready(Some(Ok(frame))) => {
+                self.note_first_byte();
+                if let Some(data) = frame.data_ref() {
+                    self.bytes += data.len() as u64;
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
+            Poll::Ready(Some(Err(err))) => {
+                self.note_first_byte();
+                Poll::Ready(Some(Err(err)))
+            }
+            Poll::Ready(None) => {
+                self.log_complete();
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
+    }
 }

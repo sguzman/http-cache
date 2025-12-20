@@ -1,6 +1,6 @@
-use proxy::config::Config;
-use proxy::errors::ProxyError;
-use proxy::run;
+use httpcache::config::Config;
+use httpcache::errors::ProxyError;
+use httpcache::run;
 use std::path::PathBuf;
 
 #[tokio::main]

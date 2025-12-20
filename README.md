@@ -11,23 +11,23 @@ Async forward proxy with HTTP/1.1 absolute-form support and HTTPS tunneling via 
 
 M1 and M2 are fully implemented in this workspace, with tests.
 
-## Workspace Layout
-- `crates/proxy/src/main.rs` entrypoint
-- `crates/proxy/src/config.rs` config parsing
-- `crates/proxy/src/server.rs` listener + routing
-- `crates/proxy/src/http_proxy.rs` HTTP forward proxy
-- `crates/proxy/src/connect_tunnel.rs` CONNECT tunneling
-- `crates/proxy/src/policy.rs` allow/deny policy engine
-- `crates/proxy/src/headers.rs` hop-by-hop header stripping
-- `crates/proxy/src/cache.rs` cache trait + NoopCache
-- `crates/proxy/src/obs.rs` tracing setup
-- `crates/proxy/src/errors.rs` error mapping
-- `crates/proxy/tests/integration.rs` integration tests
+## Layout
+- `src/main.rs` entrypoint
+- `src/config.rs` config parsing
+- `src/server.rs` listener + routing
+- `src/http_proxy.rs` HTTP forward proxy
+- `src/connect_tunnel.rs` CONNECT tunneling
+- `src/policy.rs` allow/deny policy engine
+- `src/headers.rs` hop-by-hop header stripping
+- `src/cache.rs` cache trait + NoopCache
+- `src/obs.rs` tracing setup
+- `src/errors.rs` error mapping
+- `tests/integration.rs` integration tests
 - `config.toml` example config
 
 ## Running
-- Start the proxy with the default config: `cargo run -p proxy`
-- Use a custom config path: `cargo run -p proxy -- ./path/to/config.toml`
+- Start the proxy with the default config: `cargo run`
+- Use a custom config path: `cargo run -- ./path/to/config.toml`
 
 ## Tests
 - Run all tests: `cargo test`

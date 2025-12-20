@@ -1,0 +1,30 @@
+[env]
+mode = "dev" # or "prod"
+
+[logging]
+level = "info"
+format = "pretty" # or "json"
+request_id = true
+redact_headers = ["authorization", "proxy-authorization", "cookie", "set-cookie"]
+
+[caching]
+enabled = false
+ttl_seconds = 300
+max_entries = 1024
+
+[limits]
+max_header_bytes = 32768
+max_connections = 1024
+per_ip_rps = 50
+connect_timeout_ms = 5000
+idle_timeout_ms = 60000
+
+[policy]
+allowed_domains = ["*"]
+denied_domains = []
+allowed_ports = [80, 443]
+denied_ports = []
+
+[listen]
+host = "0.0.0.0"
+port = 3128

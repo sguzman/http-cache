@@ -2,7 +2,7 @@
 mode = "dev" # or "prod"
 
 [logging]
-level = "info"
+level = "debug"
 format = "pretty" # or "json"
 request_id = true
 redact_headers = ["authorization", "proxy-authorization", "cookie", "set-cookie"]

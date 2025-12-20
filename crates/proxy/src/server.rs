@@ -128,7 +128,12 @@ async fn handle_request(
         };
 
         match result {
-            Ok(response) => response,
+            Ok(response) => {
+                let status = response.status();
+                tracing::info!(status = %status, "request completed");
+                tracing::debug!(headers = ?response.headers(), "response details");
+                response
+            }
             Err(err) => {
                 tracing::warn!(error = %err, "request failed");
                 err.to_response()

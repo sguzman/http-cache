@@ -43,16 +43,17 @@ impl AppState {
 }
 
 pub async fn run(config: Config) -> Result<(), ProxyError> {
+    init_tracing(config.env.mode, &config.logging, &config.time);
+
     if config.env.mode == crate::config::EnvMode::Dev {
         let cache_dir = std::path::Path::new(".cache");
         if cache_dir.exists() {
-            if let Err(err) = tokio::fs::remove_dir_all(cache_dir).await {
-                tracing::warn!(error = %err, "failed to clear .cache directory");
+            match tokio::fs::remove_dir_all(cache_dir).await {
+                Ok(()) => tracing::warn!("cleared .cache directory in dev mode"),
+                Err(err) => tracing::warn!(error = %err, "failed to clear .cache directory"),
             }
         }
     }
-
-    init_tracing(config.env.mode, &config.logging, &config.time);
     let addr = format!("{}:{}", config.listen.host, config.listen.port);
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!("listening on {addr}");

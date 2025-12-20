@@ -8,7 +8,7 @@ request_id = true
 redact_headers = ["authorization", "proxy-authorization", "cookie", "set-cookie"]
 
 [caching]
-enabled = false
+enabled = true
 ttl_seconds = 30000
 max_entries = 10024
 

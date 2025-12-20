@@ -51,7 +51,7 @@ pub async fn run(config: Config) -> Result<(), ProxyError> {
 }
 
 pub async fn serve(listener: TcpListener, config: Config) -> Result<(), ProxyError> {
-    let cache = build_cache(&config.caching);
+    let cache = build_cache(&config.caching).await?;
     let state = AppState::new(Arc::new(config), cache);
     serve_with_state(listener, state).await
 }
@@ -131,7 +131,16 @@ async fn handle_request(
             Method::CONNECT => {
                 handle_connect(req, &state.policy, connect_timeout, idle_timeout).await
             }
-            _ => handle_http(req, &state.policy, connect_timeout).await,
+            _ => {
+                handle_http(
+                    req,
+                    &state.policy,
+                    state.cache.clone(),
+                    connect_timeout,
+                    state.config.caching.ttl_seconds,
+                )
+                .await
+            }
         };
 
         match result {

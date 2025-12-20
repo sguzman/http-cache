@@ -17,6 +17,8 @@ pub enum ProxyError {
     ConfigParse { path: String, source: toml::de::Error },
     #[error("io error: {0}")]
     Io(#[from] io::Error),
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
     #[error("http error: {0}")]
     Http(#[from] hyper::Error),
     #[error("bad request: {0}")]
@@ -41,6 +43,7 @@ impl ProxyError {
             ProxyError::ConfigRead { .. }
             | ProxyError::ConfigParse { .. }
             | ProxyError::Io(_)
+            | ProxyError::Sqlite(_)
             | ProxyError::Http(_)
             | ProxyError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }

@@ -1,6 +1,6 @@
 # HTTP Forward Proxy (Rust)
 
-Async forward proxy with HTTP/1.1 absolute-form support and HTTPS tunneling via CONNECT. Built with Tokio + Hyper, structured logging via tracing, and a stub cache interface wired for future implementation.
+Async forward proxy with HTTP/1.1 absolute-form support and HTTPS tunneling via CONNECT. Built with Tokio + Hyper, structured logging via tracing, and SQLite-backed caching.
 
 ## Milestones
 - M1: HTTP forward proxy (GET/POST) without CONNECT
@@ -19,7 +19,7 @@ M1 and M2 are fully implemented in this workspace, with tests.
 - `src/connect_tunnel.rs` CONNECT tunneling
 - `src/policy.rs` allow/deny policy engine
 - `src/headers.rs` hop-by-hop header stripping
-- `src/cache.rs` cache trait + NoopCache
+- `src/cache.rs` cache trait + SQLite + NoopCache
 - `src/obs.rs` tracing setup
 - `src/errors.rs` error mapping
 - `tests/integration.rs` integration tests
@@ -36,4 +36,4 @@ M1 and M2 are fully implemented in this workspace, with tests.
 - CONNECT tunnels create a TCP pipe; no TLS interception.
 - Streaming is end-to-end; bodies are not buffered.
 - Hop-by-hop headers and Proxy-Authorization are stripped before forwarding.
-- Cache is stubbed as NoopCache even when enabled; wiring is tested for future work.
+- Cache uses SQLite metadata in `.cache/cache.sqlite` with LRU eviction, and stores bodies under `.cache/objects/`.

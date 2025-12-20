@@ -115,6 +115,10 @@ pub struct CacheConfig {
     pub enabled: bool,
     pub ttl_seconds: u64,
     pub max_entries: usize,
+    pub cache_channel_capacity_chunks: usize,
+    pub cache_max_object_size_bytes: u64,
+    pub cache_require_content_length: bool,
+    pub cache_writer_delay_ms: u64,
 }
 
 impl Default for CacheConfig {
@@ -123,6 +127,10 @@ impl Default for CacheConfig {
             enabled: false,
             ttl_seconds: 300,
             max_entries: 1024,
+            cache_channel_capacity_chunks: 64,
+            cache_max_object_size_bytes: 1_073_741_824,
+            cache_require_content_length: true,
+            cache_writer_delay_ms: 0,
         }
     }
 }

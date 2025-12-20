@@ -43,7 +43,7 @@ impl AppState {
 }
 
 pub async fn run(config: Config) -> Result<(), ProxyError> {
-    init_tracing(config.env.mode, &config.logging);
+    init_tracing(config.env.mode, &config.logging, &config.time);
     let addr = format!("{}:{}", config.listen.host, config.listen.port);
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!("listening on {addr}");

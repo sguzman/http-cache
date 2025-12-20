@@ -8,6 +8,7 @@ use std::path::Path;
 pub struct Config {
     pub env: EnvConfig,
     pub logging: LoggingConfig,
+    pub time: TimeConfig,
     pub caching: CacheConfig,
     pub limits: LimitsConfig,
     pub policy: PolicyConfig,
@@ -19,6 +20,7 @@ impl Default for Config {
         Self {
             env: EnvConfig::default(),
             logging: LoggingConfig::default(),
+            time: TimeConfig::default(),
             caching: CacheConfig::default(),
             limits: LimitsConfig::default(),
             policy: PolicyConfig::default(),
@@ -91,6 +93,20 @@ impl Default for LoggingConfig {
 pub enum LoggingFormat {
     Pretty,
     Json,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TimeConfig {
+    pub timezone: String,
+}
+
+impl Default for TimeConfig {
+    fn default() -> Self {
+        Self {
+            timezone: "UTC".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

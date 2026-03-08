@@ -25,6 +25,7 @@ tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.17", features = ["io"] }
 toml = "0.9.10"
 tracing = "0.1.44"
+tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 

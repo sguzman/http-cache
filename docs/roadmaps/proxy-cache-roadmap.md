@@ -159,6 +159,37 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [ ] Integration test for startup behavior in dev vs prod cache modes
 - [ ] Load tests and benchmark coverage
 
+## Comprehensive Test Coverage
+
+- [ ] Define a coverage target for all core modules and enforce it in CI
+- [ ] Add unit tests for every public function and critical internal helper
+- [ ] Add subsystem tests for configuration parsing and validation
+- [ ] Add subsystem tests for tracing and logging behavior
+- [ ] Add subsystem tests for policy allow and deny edge cases
+- [ ] Add subsystem tests for request rewriting and header sanitation edge cases
+- [ ] Add subsystem tests for cache metadata storage and retrieval
+- [ ] Add subsystem tests for cache object file lifecycle
+- [ ] Add subsystem tests for cache eviction and invalidation behavior
+- [ ] Add subsystem tests for timeout handling and connection lifecycle management
+- [ ] Add integration tests for every supported HTTP method and unsupported method handling
+- [ ] Add integration tests for all cache hit, miss, bypass, expire, and eviction paths
+- [ ] Add integration tests for concurrent requests against the same cache key
+- [ ] Add integration tests for concurrent requests across many cache keys
+- [ ] Add integration tests for error responses, malformed requests, and upstream failures
+- [ ] Add integration tests for policy-denied hosts and ports
+- [ ] Add integration tests for large payloads, slow upstreams, and slow clients
+- [ ] Add integration tests for shutdown and restart behavior
+- [ ] Add integration tests for dev-mode logging and cache reset behavior
+- [ ] Add integration tests for prod-mode persistence behavior
+- [ ] Add end-to-end tests for reverse-proxy flows if reverse proxy support is added
+- [ ] Add end-to-end tests for HTTPS asset caching if HTTPS termination/interception is added
+- [ ] Add regression tests for every production bug fixed going forward
+- [ ] Add fault-injection tests for disk errors, SQLite errors, and partial body streams
+- [ ] Add fuzz tests for HTTP parsing, header handling, and config parsing
+- [ ] Add stress tests for connection limits and cache backpressure behavior
+- [ ] Add performance benchmarks for proxy throughput, tunnel throughput, and cache hit latency
+- [ ] Add long-running soak tests for memory growth, file descriptor leaks, and cache stability
+
 ## Documentation Alignment
 
 - [x] README correctly identifies the project as a forward proxy

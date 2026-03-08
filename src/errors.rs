@@ -15,6 +15,8 @@ pub enum ProxyError {
     ConfigRead { path: String, source: io::Error },
     #[error("config parse failed for {path}: {source}")]
     ConfigParse { path: String, source: toml::de::Error },
+    #[error("config validation failed: {0}")]
+    ConfigValidation(String),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
     #[error("sqlite error: {0}")]
@@ -42,6 +44,7 @@ impl ProxyError {
             ProxyError::Timeout => StatusCode::GATEWAY_TIMEOUT,
             ProxyError::ConfigRead { .. }
             | ProxyError::ConfigParse { .. }
+            | ProxyError::ConfigValidation(_)
             | ProxyError::Io(_)
             | ProxyError::Sqlite(_)
             | ProxyError::Http(_)

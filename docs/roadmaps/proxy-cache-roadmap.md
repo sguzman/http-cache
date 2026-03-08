@@ -135,8 +135,8 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [x] Configurable content-length requirement for caching
 - [x] Configurable cache writer slowdown for testing
 - [x] Configurable policy allow/deny lists
-- [ ] Configuration validation with startup-time warnings/errors for invalid combinations
-- [ ] Separate dev/test/prod example configs
+- [x] Configuration validation with startup-time warnings/errors for invalid combinations
+- [x] Separate dev/test/prod example configs
 - [ ] Reverse-proxy-specific config model
 
 ## Testing
@@ -163,9 +163,9 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 
 - [ ] Define a coverage target for all core modules and enforce it in CI
 - [ ] Add unit tests for every public function and critical internal helper
-- [ ] Add subsystem tests for configuration parsing and validation
+- [x] Add subsystem tests for configuration parsing and validation
 - [ ] Add subsystem tests for tracing and logging behavior
-- [ ] Add subsystem tests for policy allow and deny edge cases
+- [x] Add subsystem tests for policy allow and deny edge cases
 - [ ] Add subsystem tests for request rewriting and header sanitation edge cases
 - [ ] Add subsystem tests for cache metadata storage and retrieval
 - [ ] Add subsystem tests for cache object file lifecycle
@@ -195,8 +195,8 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [x] README correctly identifies the project as a forward proxy
 - [x] README documents CONNECT support
 - [x] README documents SQLite-backed caching at a high level
-- [ ] README updated to reflect that real caching is now implemented beyond the milestone text
-- [ ] README updated to document current caching limitations and non-goals
+- [x] README updated to reflect that real caching is now implemented beyond the milestone text
+- [x] README updated to document current caching limitations and non-goals
 - [ ] Documentation for operating this as a reverse proxy, if reverse proxy support is added
 
 ## Recommended Next Execution Order

@@ -35,10 +35,95 @@ impl Config {
             path: path.display().to_string(),
             source: e,
         })?;
-        toml::from_str(&contents).map_err(|e| ProxyError::ConfigParse {
+        let config: Self = toml::from_str(&contents).map_err(|e| ProxyError::ConfigParse {
             path: path.display().to_string(),
             source: e,
-        })
+        })?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), ProxyError> {
+        if self.logging.redact_headers.iter().any(|name| name.trim().is_empty()) {
+            return Err(ProxyError::ConfigValidation(
+                "logging.redact_headers cannot contain empty header names".to_string(),
+            ));
+        }
+
+        if self.limits.max_header_bytes == 0 {
+            return Err(ProxyError::ConfigValidation(
+                "limits.max_header_bytes must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.limits.max_connections == 0 {
+            return Err(ProxyError::ConfigValidation(
+                "limits.max_connections must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.limits.connect_timeout_ms == 0 {
+            return Err(ProxyError::ConfigValidation(
+                "limits.connect_timeout_ms must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.limits.idle_timeout_ms == 0 {
+            return Err(ProxyError::ConfigValidation(
+                "limits.idle_timeout_ms must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.caching.enabled && self.caching.ttl_seconds == 0 {
+            return Err(ProxyError::ConfigValidation(
+                "caching.ttl_seconds must be greater than 0 when caching is enabled".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn startup_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        if self.env.mode == EnvMode::Dev && self.caching.enabled {
+            warnings.push(
+                "dev mode clears .cache on startup, so cached objects are not persistent across restarts"
+                    .to_string(),
+            );
+        }
+
+        if self.caching.enabled && self.caching.cache_channel_capacity_chunks == 0 {
+            warnings.push(
+                "caching is enabled but cache_channel_capacity_chunks is 0, so cache writes will be skipped"
+                    .to_string(),
+            );
+        }
+
+        if self.caching.enabled && self.caching.max_entries == 0 {
+            warnings.push(
+                "caching is enabled but max_entries is 0, so no SQLite LRU eviction limit is enforced"
+                    .to_string(),
+            );
+        }
+
+        let denied_ports: std::collections::HashSet<u16> =
+            self.policy.denied_ports.iter().copied().collect();
+        let overlapping_ports: Vec<u16> = self
+            .policy
+            .allowed_ports
+            .iter()
+            .copied()
+            .filter(|port| denied_ports.contains(port))
+            .collect();
+        if !overlapping_ports.is_empty() {
+            warnings.push(format!(
+                "policy.allowed_ports and policy.denied_ports overlap; denied ports win: {:?}",
+                overlapping_ports
+            ));
+        }
+
+        warnings
     }
 }
 
@@ -190,5 +275,63 @@ impl Default for ListenConfig {
             host: "0.0.0.0".to_string(),
             port: 3128,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validation_rejects_zero_connection_limit() {
+        let mut config = Config::default();
+        config.limits.max_connections = 0;
+
+        let err = config.validate().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("limits.max_connections must be greater than 0"));
+    }
+
+    #[test]
+    fn validation_rejects_empty_redacted_header_names() {
+        let mut config = Config::default();
+        config.logging.redact_headers.push("   ".to_string());
+
+        let err = config.validate().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("logging.redact_headers cannot contain empty header names"));
+    }
+
+    #[test]
+    fn startup_warnings_report_dev_cache_reset_and_port_overlap() {
+        let mut config = Config::default();
+        config.env.mode = EnvMode::Dev;
+        config.caching.enabled = true;
+        config.policy.allowed_ports = vec![80, 443];
+        config.policy.denied_ports = vec![443];
+
+        let warnings = config.startup_warnings();
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("dev mode clears .cache on startup")));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("denied ports win")));
+    }
+
+    #[test]
+    fn load_validates_parsed_config() {
+        let toml = r#"
+            [limits]
+            max_connections = 0
+        "#;
+
+        let config: Config = toml::from_str(toml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("limits.max_connections must be greater than 0"));
     }
 }

@@ -9,7 +9,29 @@ Async forward proxy with HTTP/1.1 absolute-form support and HTTPS tunneling via 
 - M4: Real caching implementation
 - M5: Metrics endpoint and exporters
 
-M1 and M2 are fully implemented in this workspace, with tests.
+M1, M2, and a meaningful M4 slice are implemented in this workspace, with tests.
+
+## Current State
+- Implemented:
+  - HTTP/1.1 forward proxying for absolute-form requests
+  - CONNECT tunneling for HTTPS pass-through
+  - SQLite-backed on-disk cache for cacheable GET and HEAD responses
+  - LRU-style eviction by `last_access`
+  - Cache replay, expiry handling, and invalidation of missing body files
+  - Structured logging with request timing, request ID control, and header redaction
+- Not implemented:
+  - Reverse proxy routing
+  - HTTPS asset caching through TLS termination or interception
+  - Upstream connection pooling
+  - Full RFC-grade HTTP cache semantics such as revalidation, `Vary`, or stale directives
+  - Metrics/exporters
+
+## Caching Notes
+- Cache writes are only attempted for successful GET and HEAD responses.
+- Cache expiry currently uses local TTL plus `Cache-Control: no-store`, `no-cache`, `max-age`, and `Expires`.
+- Range requests and `206 Partial Content` responses bypass caching.
+- HEAD responses are cached as metadata-only entries and replay without a body.
+- HTTPS traffic carried through CONNECT is not decrypted, so HTTPS asset bodies are not cacheable in the current architecture.
 
 ## Layout
 - `src/main.rs` entrypoint
@@ -28,6 +50,7 @@ M1 and M2 are fully implemented in this workspace, with tests.
 ## Running
 - Start the proxy with the default config: `cargo run`
 - Use a custom config path: `cargo run -- ./path/to/config.toml`
+- Example configs are available under `configs/dev.toml`, `configs/test.toml`, and `configs/prod.toml`
 
 ## Tests
 - Run all tests: `cargo test`
@@ -37,3 +60,4 @@ M1 and M2 are fully implemented in this workspace, with tests.
 - Streaming is end-to-end; bodies are not buffered.
 - Hop-by-hop headers and Proxy-Authorization are stripped before forwarding.
 - Cache uses SQLite metadata in `.cache/cache.sqlite` with LRU eviction, and stores bodies under `.cache/objects/`.
+- In dev mode the process clears `.cache` on startup.

@@ -91,4 +91,30 @@ mod tests {
         assert!(domain_matches("*.example.com", "api.example.com"));
         assert!(!domain_matches("*.example.com", "example.com"));
     }
+
+    #[test]
+    fn denied_domain_takes_precedence_over_allowed_domain() {
+        let engine = PolicyEngine::new(&PolicyConfig {
+            allowed_domains: vec!["*".into()],
+            denied_domains: vec!["blocked.example.com".into()],
+            allowed_ports: vec![80],
+            denied_ports: vec![],
+        });
+
+        let err = engine.check("blocked.example.com", 80).unwrap_err();
+        assert!(err.to_string().contains("domain denied"));
+    }
+
+    #[test]
+    fn denied_port_takes_precedence_over_allowed_port() {
+        let engine = PolicyEngine::new(&PolicyConfig {
+            allowed_domains: vec!["*".into()],
+            denied_domains: vec![],
+            allowed_ports: vec![80, 443],
+            denied_ports: vec![443],
+        });
+
+        let err = engine.check("example.com", 443).unwrap_err();
+        assert!(err.to_string().contains("port denied"));
+    }
 }

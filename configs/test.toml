@@ -1,0 +1,37 @@
+[env]
+mode = "prod"
+
+[logging]
+level = "debug"
+format = "json"
+request_id = true
+redact_headers = ["authorization", "proxy-authorization", "cookie", "set-cookie"]
+
+[time]
+timezone = "UTC"
+
+[caching]
+enabled = true
+ttl_seconds = 60
+max_entries = 128
+cache_channel_capacity_chunks = 16
+cache_max_object_size_bytes = 10485760
+cache_require_content_length = true
+cache_writer_delay_ms = 0
+
+[limits]
+max_header_bytes = 32768
+max_connections = 128
+per_ip_rps = 50
+connect_timeout_ms = 3000
+idle_timeout_ms = 10000
+
+[policy]
+allowed_domains = ["*"]
+denied_domains = []
+allowed_ports = [80, 443]
+denied_ports = []
+
+[listen]
+host = "127.0.0.1"
+port = 3128

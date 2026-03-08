@@ -46,6 +46,9 @@ impl AppState {
 
 pub async fn run(config: Config) -> Result<(), ProxyError> {
     init_tracing(config.env.mode, &config.logging, &config.time);
+    for warning in config.startup_warnings() {
+        tracing::warn!(warning = %warning, "startup configuration warning");
+    }
     prepare_runtime_dirs(config.env.mode).await?;
     let addr = format!("{}:{}", config.listen.host, config.listen.port);
     let listener = TcpListener::bind(&addr).await?;

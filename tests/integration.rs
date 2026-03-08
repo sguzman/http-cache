@@ -2,7 +2,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
-use hyper::{Request, Response, Uri};
+use hyper::{Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use httpcache::config::Config;
 use httpcache::server::serve;
@@ -150,6 +150,38 @@ async fn connect_tunnel_echoes_bytes() {
     let mut echoed = vec![0u8; payload.len()];
     stream.read_exact(&mut echoed).await.unwrap();
     assert_eq!(echoed, payload);
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn policy_denied_requests_return_forbidden() {
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["example.com".to_string()];
+    config.policy.allowed_ports = vec![18080];
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let stream = TcpStream::connect(proxy_addr).await.unwrap();
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+
+    let uri: Uri = "http://127.0.0.1:18080/denied".parse().unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+
+    let response = sender.send_request(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body_text = String::from_utf8_lossy(&body);
+    assert!(body_text.contains("policy denied"));
 
     proxy_handle.abort();
 }

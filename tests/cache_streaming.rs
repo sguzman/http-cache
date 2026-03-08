@@ -5,9 +5,10 @@ use httpcache::config::Config;
 use httpcache::server::serve;
 use hyper::body::Incoming;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode, Uri};
+use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use rusqlite::OptionalExtension;
+use serial_test::serial;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -82,32 +83,45 @@ async fn spawn_streaming_upstream(
                 request_count.fetch_add(1, Ordering::SeqCst);
                 let mode = mode;
                 async move {
+                    let is_head = req.method() == Method::HEAD;
                     let mut response = match mode {
                         UpstreamMode::RangeAware => {
                             if req.headers().contains_key(hyper::header::RANGE) {
                                 Response::builder()
                                     .status(StatusCode::PARTIAL_CONTENT)
                                     .header(hyper::header::CONTENT_RANGE, "bytes 0-99/1000")
-                                    .body(build_stream_body(100, chunk_size, None))
+                                    .body(build_stream_body(
+                                        if is_head { 0 } else { 100 },
+                                        chunk_size,
+                                        None,
+                                    ))
                                     .unwrap()
                             } else {
                                 Response::builder()
                                     .status(StatusCode::OK)
-                                    .body(build_stream_body(total_bytes, chunk_size, None))
+                                    .body(build_stream_body(
+                                        if is_head { 0 } else { total_bytes },
+                                        chunk_size,
+                                        None,
+                                    ))
                                     .unwrap()
                             }
                         }
                         UpstreamMode::ErrorAfterBytes(limit) => Response::builder()
                             .status(StatusCode::OK)
                             .body(build_stream_body(
-                                total_bytes,
+                                if is_head { 0 } else { total_bytes },
                                 chunk_size,
                                 Some(limit),
                             ))
                             .unwrap(),
                         UpstreamMode::Normal => Response::builder()
                             .status(StatusCode::OK)
-                            .body(build_stream_body(total_bytes, chunk_size, None))
+                            .body(build_stream_body(
+                                if is_head { 0 } else { total_bytes },
+                                chunk_size,
+                                None,
+                            ))
                             .unwrap(),
                     };
 
@@ -173,6 +187,15 @@ async fn fetch_via_proxy(
     uri: Uri,
     headers: Vec<(&'static str, &'static str)>,
 ) -> (StatusCode, hyper::HeaderMap, Result<Bytes, hyper::Error>) {
+    fetch_via_proxy_with_method(proxy_addr, Method::GET, uri, headers).await
+}
+
+async fn fetch_via_proxy_with_method(
+    proxy_addr: SocketAddr,
+    method: Method,
+    uri: Uri,
+    headers: Vec<(&'static str, &'static str)>,
+) -> (StatusCode, hyper::HeaderMap, Result<Bytes, hyper::Error>) {
     let stream = TcpStream::connect(proxy_addr).await.unwrap();
     let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
@@ -181,7 +204,7 @@ async fn fetch_via_proxy(
         let _ = conn.await;
     });
 
-    let mut builder = Request::builder().method("GET").uri(uri);
+    let mut builder = Request::builder().method(method).uri(uri);
     {
         let headers_map = builder.headers_mut().unwrap();
         for (name, value) in headers {
@@ -216,6 +239,46 @@ fn read_cache_entry(key: &str) -> Option<(String, u64)> {
     .flatten()
 }
 
+fn cache_entry_exists(key: &str) -> bool {
+    let db_path = Path::new(".cache/cache.sqlite");
+    if !db_path.exists() {
+        return false;
+    }
+    let conn = match rusqlite::Connection::open(db_path) {
+        Ok(conn) => conn,
+        Err(_) => return false,
+    };
+    conn.query_row(
+        "SELECT 1 FROM cache_entries WHERE key = ?1",
+        [key],
+        |_row| Ok(()),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .is_some()
+}
+
+fn read_cache_keys() -> Vec<String> {
+    let db_path = Path::new(".cache/cache.sqlite");
+    if !db_path.exists() {
+        return Vec::new();
+    }
+    let conn = match rusqlite::Connection::open(db_path) {
+        Ok(conn) => conn,
+        Err(_) => return Vec::new(),
+    };
+    let mut stmt = match conn.prepare("SELECT key FROM cache_entries ORDER BY key ASC") {
+        Ok(stmt) => stmt,
+        Err(_) => return Vec::new(),
+    };
+    let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
+        Ok(rows) => rows,
+        Err(_) => return Vec::new(),
+    };
+    rows.filter_map(Result::ok).collect()
+}
+
 async fn wait_for_cache_entry(key: &str, timeout_ms: u64) -> Option<(String, u64)> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
@@ -243,6 +306,7 @@ fn list_cache_files() -> HashSet<String> {
 }
 
 #[tokio::test]
+#[serial]
 async fn cache_streams_and_replays() {
     let _guard = lock_test();
     init_tracing();
@@ -298,6 +362,7 @@ async fn cache_streams_and_replays() {
 }
 
 #[tokio::test]
+#[serial]
 async fn cache_discards_on_body_error() {
     let _guard = lock_test();
     init_tracing();
@@ -335,6 +400,7 @@ async fn cache_discards_on_body_error() {
 }
 
 #[tokio::test]
+#[serial]
 async fn range_responses_are_not_cached() {
     let _guard = lock_test();
     init_tracing();
@@ -372,6 +438,7 @@ async fn range_responses_are_not_cached() {
 }
 
 #[tokio::test]
+#[serial]
 async fn cache_disables_on_buffer_pressure() {
     let _guard = lock_test();
     init_tracing();
@@ -399,6 +466,172 @@ async fn cache_disables_on_buffer_pressure() {
     let key = cache_key("GET", &format!("http://{}/pressure", upstream_addr));
     assert!(read_cache_entry(&key).is_none());
     assert!(list_cache_files().is_empty());
+
+    proxy_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+#[serial]
+async fn head_cache_replays_without_upstream_round_trip() {
+    let _guard = lock_test();
+    init_tracing();
+    clear_cache_dir();
+
+    let total_bytes = 4096;
+    let (upstream_addr, upstream_handle, request_count) =
+        spawn_streaming_upstream(UpstreamMode::Normal, total_bytes, 1024, true).await;
+
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+    config.caching.enabled = true;
+    config.caching.cache_require_content_length = true;
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let url = format!("http://{}/head", upstream_addr);
+    let uri: Uri = url.parse().unwrap();
+    let (status, headers, body) =
+        fetch_via_proxy_with_method(proxy_addr, Method::HEAD, uri.clone(), Vec::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.unwrap().is_empty());
+    assert_eq!(
+        headers.get(hyper::header::CONTENT_LENGTH).unwrap(),
+        total_bytes.to_string().as_str()
+    );
+
+    let key = cache_key("HEAD", &url);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(cache_entry_exists(&key), "HEAD cache entry missing");
+
+    let (status, headers, body) =
+        fetch_via_proxy_with_method(proxy_addr, Method::HEAD, uri, Vec::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.unwrap().is_empty());
+    assert_eq!(
+        headers.get(hyper::header::CONTENT_LENGTH).unwrap(),
+        total_bytes.to_string().as_str()
+    );
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+    proxy_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+#[serial]
+async fn cache_entries_expire_and_refetch() {
+    let _guard = lock_test();
+    init_tracing();
+    clear_cache_dir();
+
+    let (upstream_addr, upstream_handle, request_count) =
+        spawn_streaming_upstream(UpstreamMode::Normal, 2048, 256, true).await;
+
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+    config.caching.enabled = true;
+    config.caching.ttl_seconds = 1;
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let uri: Uri = format!("http://{}/expiring", upstream_addr).parse().unwrap();
+    let (status, _headers, body) = fetch_via_proxy(proxy_addr, uri.clone(), Vec::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.unwrap().len(), 2048);
+
+    tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+
+    let (status, _headers, body) = fetch_via_proxy(proxy_addr, uri, Vec::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.unwrap().len(), 2048);
+    assert_eq!(request_count.load(Ordering::SeqCst), 2);
+
+    proxy_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+#[serial]
+async fn cache_eviction_removes_least_recently_used_entry() {
+    let _guard = lock_test();
+    init_tracing();
+    clear_cache_dir();
+
+    let (upstream_addr, upstream_handle, _request_count) =
+        spawn_streaming_upstream(UpstreamMode::Normal, 1024, 256, true).await;
+
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+    config.caching.enabled = true;
+    config.caching.max_entries = 1;
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let one_url = format!("http://{}/one", upstream_addr);
+    let two_url = format!("http://{}/two", upstream_addr);
+    let one_uri: Uri = one_url.parse().unwrap();
+    let two_uri: Uri = two_url.parse().unwrap();
+
+    assert_eq!(
+        fetch_via_proxy(proxy_addr, one_uri, Vec::new()).await.0,
+        StatusCode::OK
+    );
+    assert!(wait_for_cache_entry(&cache_key("GET", &one_url), 500).await.is_some());
+
+    assert_eq!(
+        fetch_via_proxy(proxy_addr, two_uri, Vec::new()).await.0,
+        StatusCode::OK
+    );
+    assert!(wait_for_cache_entry(&cache_key("GET", &two_url), 500).await.is_some());
+
+    let keys = read_cache_keys();
+    assert_eq!(keys, vec![cache_key("GET", &two_url)]);
+    assert_eq!(list_cache_files().len(), 1);
+
+    proxy_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+#[serial]
+async fn missing_cached_body_file_triggers_refetch() {
+    let _guard = lock_test();
+    init_tracing();
+    clear_cache_dir();
+
+    let (upstream_addr, upstream_handle, request_count) =
+        spawn_streaming_upstream(UpstreamMode::Normal, 3072, 512, true).await;
+
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+    config.caching.enabled = true;
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let url = format!("http://{}/missing-file", upstream_addr);
+    let uri: Uri = url.parse().unwrap();
+    let key = cache_key("GET", &url);
+
+    assert_eq!(
+        fetch_via_proxy(proxy_addr, uri.clone(), Vec::new()).await.0,
+        StatusCode::OK
+    );
+    let (body_path, _) = wait_for_cache_entry(&key, 500)
+        .await
+        .expect("cache entry missing after initial fetch");
+    std::fs::remove_file(&body_path).unwrap();
+
+    assert_eq!(
+        fetch_via_proxy(proxy_addr, uri, Vec::new()).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(request_count.load(Ordering::SeqCst), 2);
+    assert!(wait_for_cache_entry(&key, 500).await.is_some());
 
     proxy_handle.abort();
     upstream_handle.abort();

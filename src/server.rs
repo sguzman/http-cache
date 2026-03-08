@@ -8,10 +8,12 @@ use crate::policy::PolicyEngine;
 use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::BodyExt;
+use hyper::header::HeaderMap;
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioIo;
+use std::collections::HashSet;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -44,8 +46,17 @@ impl AppState {
 
 pub async fn run(config: Config) -> Result<(), ProxyError> {
     init_tracing(config.env.mode, &config.logging, &config.time);
+    prepare_runtime_dirs(config.env.mode).await?;
+    let addr = format!("{}:{}", config.listen.host, config.listen.port);
+    let listener = TcpListener::bind(&addr).await?;
+    tracing::info!("listening on {addr}");
+    serve(listener, config).await
+}
 
-    if config.env.mode == crate::config::EnvMode::Dev {
+pub async fn prepare_runtime_dirs(
+    env_mode: crate::config::EnvMode,
+) -> Result<(), ProxyError> {
+    if env_mode == crate::config::EnvMode::Dev {
         let cache_dir = std::path::Path::new(".cache");
         if cache_dir.exists() {
             match tokio::fs::remove_dir_all(cache_dir).await {
@@ -54,10 +65,7 @@ pub async fn run(config: Config) -> Result<(), ProxyError> {
             }
         }
     }
-    let addr = format!("{}:{}", config.listen.host, config.listen.port);
-    let listener = TcpListener::bind(&addr).await?;
-    tracing::info!("listening on {addr}");
-    serve(listener, config).await
+    Ok(())
 }
 
 pub async fn serve(listener: TcpListener, config: Config) -> Result<(), ProxyError> {
@@ -113,25 +121,43 @@ async fn handle_request(
     peer_addr: SocketAddr,
     state: AppState,
 ) -> Result<Response<ProxyBody>, Infallible> {
-    let request_id = Uuid::new_v4().to_string();
     let start = Instant::now();
     let method = req.method().clone();
     let uri = req.uri().to_string();
     let cache_name = state.cache.name();
     let cache_enabled = state.cache.is_enabled();
-    let span = tracing::info_span!(
-        "request",
-        request_id = %request_id,
-        method = %method,
-        uri = %uri,
-        client_ip = %peer_addr.ip(),
-        cache = cache_name,
-        cache_enabled = cache_enabled
+    let request_headers = redact_headers_for_logging(
+        req.headers(),
+        &state.config.logging.redact_headers,
     );
+
+    let span = if state.config.logging.request_id {
+        let request_id = Uuid::new_v4().to_string();
+        tracing::info_span!(
+            "request",
+            request_id = %request_id,
+            method = %method,
+            uri = %uri,
+            client_ip = %peer_addr.ip(),
+            cache = cache_name,
+            cache_enabled = cache_enabled
+        )
+    } else {
+        tracing::info_span!(
+            "request",
+            method = %method,
+            uri = %uri,
+            client_ip = %peer_addr.ip(),
+            cache = cache_name,
+            cache_enabled = cache_enabled
+        )
+    };
 
     let response = async move {
         let connect_timeout = Duration::from_millis(state.config.limits.connect_timeout_ms);
         let idle_timeout = Duration::from_millis(state.config.limits.idle_timeout_ms);
+
+        tracing::debug!(headers = ?request_headers, "request details");
 
         if state.config.limits.per_ip_rps == 0 {
             tracing::warn!("per_ip_rps is 0; all requests will be effectively denied");
@@ -156,7 +182,15 @@ async fn handle_request(
         match result {
             Ok(response) => {
                 let status = response.status();
-                tracing::debug!(status = %status, headers = ?response.headers(), "response details");
+                let response_headers = redact_headers_for_logging(
+                    response.headers(),
+                    &state.config.logging.redact_headers,
+                );
+                tracing::debug!(
+                    status = %status,
+                    headers = ?response_headers,
+                    "response details"
+                );
                 let span = tracing::Span::current();
                 response.map(|body| TimedBody::new(body, start, status, span).boxed())
             }
@@ -170,6 +204,29 @@ async fn handle_request(
     .await;
 
     Ok(response)
+}
+
+fn redact_headers_for_logging(
+    headers: &HeaderMap,
+    redact_headers: &[String],
+) -> Vec<(String, String)> {
+    let redact_names: HashSet<String> = redact_headers
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            let name_string = name.as_str().to_string();
+            let value_string = if redact_names.contains(name.as_str()) {
+                "<redacted>".to_string()
+            } else {
+                value.to_str().ok()?.to_string()
+            };
+            Some((name_string, value_string))
+        })
+        .collect()
 }
 
 struct TimedBody<B> {
@@ -260,5 +317,28 @@ where
 
     fn size_hint(&self) -> SizeHint {
         self.inner.size_hint()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyper::header::{AUTHORIZATION, COOKIE, HeaderValue};
+
+    #[test]
+    fn redacts_configured_headers_for_logging() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("secret"));
+        headers.insert(COOKIE, HeaderValue::from_static("session=abc"));
+        headers.insert("x-test", HeaderValue::from_static("value"));
+
+        let redacted = redact_headers_for_logging(
+            &headers,
+            &["authorization".into(), "cookie".into()],
+        );
+
+        assert!(redacted.contains(&("authorization".into(), "<redacted>".into())));
+        assert!(redacted.contains(&("cookie".into(), "<redacted>".into())));
+        assert!(redacted.contains(&("x-test".into(), "value".into())));
     }
 }

@@ -36,3 +36,4 @@ hyper = { version = "1.8.1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1.19", features = ["tokio"] }
 tokio = { version = "1.47.2", features = ["full"] }
 tracing = "0.1.44"
+serial_test = "3.4.0"

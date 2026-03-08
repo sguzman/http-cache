@@ -117,8 +117,8 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [x] Per-request timing logs including duration and TTFB
 - [x] Cache hit/miss/store logging
 - [x] Tunnel lifecycle logging
-- [ ] Honor `logging.request_id` as a real feature toggle
-- [ ] Honor `logging.redact_headers` when request/response headers are logged
+- [x] Honor `logging.request_id` as a real feature toggle
+- [x] Honor `logging.redact_headers` when request/response headers are logged
 - [ ] Metrics endpoint
 - [ ] Prometheus or OpenTelemetry exporters
 - [ ] Structured counters for cache hits, misses, bypasses, evictions, and errors
@@ -151,12 +151,12 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [x] Integration test for cache discard on upstream body failure
 - [x] Integration test for range response bypass
 - [x] Integration test for cache disablement under buffer pressure
-- [ ] Integration test for HEAD cache replay
-- [ ] Integration test for cache expiry behavior
-- [ ] Integration test for LRU eviction behavior
-- [ ] Integration test for missing body file invalidation
-- [ ] Integration test for policy denial paths
-- [ ] Integration test for startup behavior in dev vs prod cache modes
+- [x] Integration test for HEAD cache replay
+- [x] Integration test for cache expiry behavior
+- [x] Integration test for LRU eviction behavior
+- [x] Integration test for missing body file invalidation
+- [x] Integration test for policy denial paths
+- [x] Integration test for startup behavior in dev vs prod cache modes
 - [ ] Load tests and benchmark coverage
 
 ## Comprehensive Test Coverage
@@ -202,9 +202,9 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 ## Recommended Next Execution Order
 
 - [ ] Enforce real rate limiting and correct header-size limits
-- [ ] Wire logging config fully, especially header redaction
-- [ ] Add cache expiry and eviction integration tests
-- [ ] Add HEAD cache replay coverage
+- [x] Wire logging config fully, especially header redaction
+- [x] Add cache expiry and eviction integration tests
+- [x] Add HEAD cache replay coverage
 - [ ] Implement upstream connection pooling
 - [ ] Decide whether this project remains a forward proxy or should be redesigned as a reverse proxy
 - [ ] If reverse proxy is the goal, introduce a new routing/config model instead of patching the current forward-proxy path

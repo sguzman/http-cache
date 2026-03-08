@@ -31,10 +31,6 @@ pub(super) async fn cached_response(
     }
 
     strip_hop_by_hop(&mut headers);
-    headers.insert(
-        hyper::header::CONTENT_LENGTH,
-        HeaderValue::from_str(&entry.body_size.to_string()).map_err(|_| ProxyError::Internal)?,
-    );
 
     let status = StatusCode::from_u16(entry.status).unwrap_or(StatusCode::OK);
 
@@ -47,6 +43,11 @@ pub(super) async fn cached_response(
         *response.headers_mut() = headers;
         return Ok(response);
     }
+
+    headers.insert(
+        hyper::header::CONTENT_LENGTH,
+        HeaderValue::from_str(&entry.body_size.to_string()).map_err(|_| ProxyError::Internal)?,
+    );
 
     let path = entry.body_path.as_ref().ok_or_else(|| ProxyError::Internal)?;
     let file = tokio::fs::File::open(path).await?;

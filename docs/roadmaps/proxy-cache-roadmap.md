@@ -80,6 +80,22 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [ ] Range-aware caching and partial object assembly
 - [ ] Cache key normalization beyond raw `method + URL`
 
+## HTTPS Asset Caching
+
+- [ ] Decide the HTTPS caching model: reverse proxy TLS termination vs forward-proxy TLS interception
+- [ ] Reverse-proxy TLS termination path for cacheable HTTPS assets
+- [ ] Forward-proxy MITM/TLS interception path for cacheable HTTPS assets
+- [ ] Certificate and private key management for terminated HTTPS traffic
+- [ ] Internal CA generation and trust workflow if forward-proxy interception is chosen
+- [ ] SNI-based routing for terminated HTTPS traffic
+- [ ] Decrypted HTTP request/response handling after TLS termination
+- [ ] Reuse the existing cache pipeline for decrypted HTTPS responses
+- [ ] Cache policy and keying rules for HTTPS assets
+- [ ] Security model for sensitive HTTPS responses to avoid caching private data
+- [ ] Operator controls to scope which hosts or paths are eligible for HTTPS caching
+- [ ] Tests proving HTTPS assets can be cached and replayed without CONNECT pass-through
+- [ ] Documentation covering the security and operational implications of HTTPS caching
+
 ## Upstream Connectivity
 
 - [x] Direct TCP connect to upstream origin

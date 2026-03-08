@@ -166,16 +166,16 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [x] Add subsystem tests for configuration parsing and validation
 - [ ] Add subsystem tests for tracing and logging behavior
 - [x] Add subsystem tests for policy allow and deny edge cases
-- [ ] Add subsystem tests for request rewriting and header sanitation edge cases
+- [x] Add subsystem tests for request rewriting and header sanitation edge cases
 - [ ] Add subsystem tests for cache metadata storage and retrieval
 - [ ] Add subsystem tests for cache object file lifecycle
 - [ ] Add subsystem tests for cache eviction and invalidation behavior
 - [ ] Add subsystem tests for timeout handling and connection lifecycle management
-- [ ] Add integration tests for every supported HTTP method and unsupported method handling
+- [x] Add integration tests for every supported HTTP method and unsupported method handling
 - [ ] Add integration tests for all cache hit, miss, bypass, expire, and eviction paths
 - [ ] Add integration tests for concurrent requests against the same cache key
 - [ ] Add integration tests for concurrent requests across many cache keys
-- [ ] Add integration tests for error responses, malformed requests, and upstream failures
+- [x] Add integration tests for error responses, malformed requests, and upstream failures
 - [ ] Add integration tests for policy-denied hosts and ports
 - [ ] Add integration tests for large payloads, slow upstreams, and slow clients
 - [ ] Add integration tests for shutdown and restart behavior

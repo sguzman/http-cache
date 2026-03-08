@@ -73,4 +73,47 @@ mod tests {
         assert_eq!(req.uri().to_string(), "/a?b=c");
         assert_eq!(req.headers().get(HOST).unwrap(), "example.com");
     }
+
+    #[test]
+    fn preserves_explicit_port_in_host_header() {
+        let uri = "http://example.com:8080/".parse::<Uri>().unwrap();
+        let mut req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Empty::<Bytes>::new())
+            .unwrap();
+
+        let target = rewrite_absolute_form(&mut req).unwrap();
+
+        assert_eq!(target.port, 8080);
+        assert_eq!(target.authority, "example.com:8080");
+        assert_eq!(req.headers().get(HOST).unwrap(), "example.com:8080");
+    }
+
+    #[test]
+    fn rejects_non_http_schemes() {
+        let uri = "https://example.com/asset".parse::<Uri>().unwrap();
+        let mut req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Empty::<Bytes>::new())
+            .unwrap();
+
+        let err = rewrite_absolute_form(&mut req).unwrap_err();
+        assert!(err.to_string().contains("unsupported scheme"));
+    }
+
+    #[test]
+    fn defaults_to_root_path_when_missing_path_and_query() {
+        let uri = "http://example.com".parse::<Uri>().unwrap();
+        let mut req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Empty::<Bytes>::new())
+            .unwrap();
+
+        let target = rewrite_absolute_form(&mut req).unwrap();
+        assert_eq!(target.host, "example.com");
+        assert_eq!(req.uri().to_string(), "/");
+    }
 }

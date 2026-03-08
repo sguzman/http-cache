@@ -52,4 +52,19 @@ mod tests {
         assert!(headers.get("proxy-authorization").is_none());
         assert!(headers.get(HOST).is_some());
     }
+
+    #[test]
+    fn strips_headers_named_by_connection_tokens_with_whitespace() {
+        let mut headers = HeaderMap::new();
+        headers.insert("Connection", HeaderValue::from_static(" x-custom , x-next "));
+        headers.insert("x-custom", HeaderValue::from_static("one"));
+        headers.insert("x-next", HeaderValue::from_static("two"));
+        headers.insert("x-keep", HeaderValue::from_static("three"));
+
+        strip_hop_by_hop(&mut headers);
+
+        assert!(headers.get("x-custom").is_none());
+        assert!(headers.get("x-next").is_none());
+        assert_eq!(headers.get("x-keep").unwrap(), "three");
+    }
 }

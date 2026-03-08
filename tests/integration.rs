@@ -2,7 +2,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode, Uri};
+use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use httpcache::config::Config;
 use httpcache::server::serve;
@@ -13,8 +13,10 @@ use tokio::sync::{oneshot, Mutex};
 use std::sync::Arc;
 
 struct UpstreamCapture {
+    method: String,
     uri: String,
     host: Option<String>,
+    body: Bytes,
 }
 
 async fn spawn_upstream() -> (SocketAddr, oneshot::Receiver<UpstreamCapture>) {
@@ -28,13 +30,17 @@ async fn spawn_upstream() -> (SocketAddr, oneshot::Receiver<UpstreamCapture>) {
         let service = service_fn(move |req: Request<Incoming>| {
             let tx = tx.clone();
             async move {
+                let (parts, body) = req.into_parts();
+                let body = body.collect().await.unwrap().to_bytes();
                 let capture = UpstreamCapture {
-                    uri: req.uri().to_string(),
-                    host: req
-                        .headers()
+                    method: parts.method.to_string(),
+                    uri: parts.uri.to_string(),
+                    host: parts
+                        .headers
                         .get(hyper::header::HOST)
                         .and_then(|v| v.to_str().ok())
                         .map(|s| s.to_string()),
+                    body,
                 };
                 if let Some(sender) = tx.lock().await.take() {
                     let _ = sender.send(capture);
@@ -97,11 +103,28 @@ async fn http_proxy_forwards_origin_form() {
     assert_eq!(body, Bytes::from_static(b"ok"));
 
     let capture = upstream_rx.await.unwrap();
+    assert_eq!(capture.method, "GET");
     assert_eq!(capture.uri, "/hello?name=test");
     let expected_host = format!("{upstream_addr}");
     assert_eq!(capture.host.as_deref(), Some(expected_host.as_str()));
+    assert!(capture.body.is_empty());
 
     proxy_handle.abort();
+}
+
+async fn send_request_via_proxy(
+    proxy_addr: SocketAddr,
+    req: Request<Empty<Bytes>>,
+) -> Response<Incoming> {
+    let stream = TcpStream::connect(proxy_addr).await.unwrap();
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+
+    sender.send_request(req).await.unwrap()
 }
 
 #[tokio::test]
@@ -162,14 +185,6 @@ async fn policy_denied_requests_return_forbidden() {
 
     let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
 
-    let stream = TcpStream::connect(proxy_addr).await.unwrap();
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .unwrap();
-    tokio::spawn(async move {
-        let _ = conn.await;
-    });
-
     let uri: Uri = "http://127.0.0.1:18080/denied".parse().unwrap();
     let req = Request::builder()
         .method("GET")
@@ -177,11 +192,107 @@ async fn policy_denied_requests_return_forbidden() {
         .body(Empty::<Bytes>::new())
         .unwrap();
 
-    let response = sender.send_request(req).await.unwrap();
+    let response = send_request_via_proxy(proxy_addr, req).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body_text = String::from_utf8_lossy(&body);
     assert!(body_text.contains("policy denied"));
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn http_proxy_forwards_post_body() {
+    let (upstream_addr, upstream_rx) = spawn_upstream().await;
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let uri: Uri = format!("http://{}/submit", upstream_addr).parse().unwrap();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response.into_body().collect().await.unwrap();
+
+    let capture = upstream_rx.await.unwrap();
+    assert_eq!(capture.method, "POST");
+    assert_eq!(capture.uri, "/submit");
+    assert!(capture.body.is_empty());
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn unsupported_https_absolute_form_returns_bad_request() {
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![443];
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let uri: Uri = "https://example.com/asset.js".parse().unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("unsupported scheme"));
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn origin_form_request_returns_bad_request() {
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![80];
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/relative-only")
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("missing scheme"));
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn upstream_connect_failure_returns_error_response() {
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![6553];
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let uri: Uri = "http://127.0.0.1:6553/unreachable".parse().unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("io error"));
 
     proxy_handle.abort();
 }

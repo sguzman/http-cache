@@ -24,8 +24,8 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [x] `Proxy-Authorization` stripping before forwarding
 - [x] CONNECT tunnel idle timeout handling
 - [x] Upstream connect timeout handling
-- [ ] Real per-IP rate limiting enforcement
-- [ ] True header byte-size limit enforcement
+- [x] Real per-IP rate limiting enforcement
+- [x] True header byte-size limit enforcement
 - [ ] Graceful shutdown flow for listener and in-flight requests
 - [ ] Request body size limits
 - [ ] Circuit breaking or overload protection beyond max connections
@@ -167,16 +167,16 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [ ] Add subsystem tests for tracing and logging behavior
 - [x] Add subsystem tests for policy allow and deny edge cases
 - [x] Add subsystem tests for request rewriting and header sanitation edge cases
-- [ ] Add subsystem tests for cache metadata storage and retrieval
-- [ ] Add subsystem tests for cache object file lifecycle
-- [ ] Add subsystem tests for cache eviction and invalidation behavior
+- [x] Add subsystem tests for cache metadata storage and retrieval
+- [x] Add subsystem tests for cache object file lifecycle
+- [x] Add subsystem tests for cache eviction and invalidation behavior
 - [ ] Add subsystem tests for timeout handling and connection lifecycle management
 - [x] Add integration tests for every supported HTTP method and unsupported method handling
-- [ ] Add integration tests for all cache hit, miss, bypass, expire, and eviction paths
+- [x] Add integration tests for all cache hit, miss, bypass, expire, and eviction paths
 - [ ] Add integration tests for concurrent requests against the same cache key
 - [ ] Add integration tests for concurrent requests across many cache keys
 - [x] Add integration tests for error responses, malformed requests, and upstream failures
-- [ ] Add integration tests for policy-denied hosts and ports
+- [x] Add integration tests for policy-denied hosts and ports
 - [ ] Add integration tests for large payloads, slow upstreams, and slow clients
 - [ ] Add integration tests for shutdown and restart behavior
 - [ ] Add integration tests for dev-mode logging and cache reset behavior
@@ -201,7 +201,7 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 
 ## Recommended Next Execution Order
 
-- [ ] Enforce real rate limiting and correct header-size limits
+- [x] Enforce real rate limiting and correct header-size limits
 - [x] Wire logging config fully, especially header redaction
 - [x] Add cache expiry and eviction integration tests
 - [x] Add HEAD cache replay coverage

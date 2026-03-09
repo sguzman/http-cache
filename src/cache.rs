@@ -142,7 +142,7 @@ impl Cache for SqliteCache {
                         url: row.get(2)?,
                         status: row.get::<_, u16>(3)?,
                         headers: serde_json::from_str(&headers).unwrap_or_default(),
-                        body_path: row.get(5)?,
+                        body_path: row.get::<_, Option<String>>(5)?,
                         body_size: row.get::<_, i64>(6)? as u64,
                         created_at: row.get(7)?,
                         expires_at: row.get(8)?,
@@ -266,9 +266,10 @@ impl Cache for SqliteCache {
                 .query_row(
                     "SELECT body_path FROM cache_entries WHERE key = ?1",
                     [&key],
-                    |row| row.get(0),
+                    |row| row.get::<_, Option<String>>(0),
                 )
-                .optional()?;
+                .optional()?
+                .flatten();
             conn.execute("DELETE FROM cache_entries WHERE key = ?1", [&key])?;
             if let Some(path) = body_path {
                 let _ = std::fs::remove_file(path);
@@ -363,6 +364,12 @@ pub fn parse_cache_control(value: &str) -> CacheControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CacheConfig;
+    use serial_test::serial;
+
+    fn clear_cache_dir() {
+        let _ = std::fs::remove_dir_all(".cache");
+    }
 
     #[test]
     fn cache_control_parsing() {
@@ -370,5 +377,156 @@ mod tests {
         assert_eq!(control.max_age, Some(60));
         assert!(control.no_cache);
         assert!(!control.no_store);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn sqlite_cache_round_trips_metadata_and_deletes_body_file() {
+        clear_cache_dir();
+
+        let config = CacheConfig {
+            enabled: true,
+            ..CacheConfig::default()
+        };
+        let cache = SqliteCache::new(&config).await.unwrap();
+        let body_path = cache_objects_dir(cache.cache_dir()).join("roundtrip-body");
+        tokio::fs::write(&body_path, b"hello-cache").await.unwrap();
+
+        let entry = CacheStoreRequest {
+            key: "GET http://example.com/asset".into(),
+            method: "GET".into(),
+            url: "http://example.com/asset".into(),
+            status: 200,
+            headers: vec![("content-type".into(), "text/plain".into())],
+            body_path: Some(body_path.to_string_lossy().to_string()),
+            body_size: 11,
+            created_at: now_unix(),
+            expires_at: now_unix() + 60,
+        };
+
+        cache.store(entry).await.unwrap();
+        let loaded = cache
+            .get("GET", "http://example.com/asset")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.status, 200);
+        assert_eq!(loaded.body_size, 11);
+        assert_eq!(loaded.headers.len(), 1);
+
+        cache.delete(&loaded.key).await.unwrap();
+        assert!(cache.get("GET", "http://example.com/asset").await.unwrap().is_none());
+        assert!(!body_path.exists());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn sqlite_cache_removes_expired_entries_on_lookup() {
+        clear_cache_dir();
+
+        let config = CacheConfig {
+            enabled: true,
+            ..CacheConfig::default()
+        };
+        let cache = SqliteCache::new(&config).await.unwrap();
+
+        cache
+            .store(CacheStoreRequest {
+                key: "GET http://example.com/expired".into(),
+                method: "GET".into(),
+                url: "http://example.com/expired".into(),
+                status: 200,
+                headers: vec![],
+                body_path: None,
+                body_size: 0,
+                created_at: now_unix() - 10,
+                expires_at: now_unix() - 1,
+            })
+            .await
+            .unwrap();
+
+        assert!(cache.get("GET", "http://example.com/expired").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn sqlite_cache_eviction_removes_oldest_entry_and_its_file() {
+        clear_cache_dir();
+
+        let config = CacheConfig {
+            enabled: true,
+            max_entries: 1,
+            ..CacheConfig::default()
+        };
+        let cache = SqliteCache::new(&config).await.unwrap();
+        let objects_dir = cache_objects_dir(cache.cache_dir());
+        let old_body = objects_dir.join("old-body");
+        let new_body = objects_dir.join("new-body");
+        tokio::fs::write(&old_body, b"old").await.unwrap();
+        tokio::fs::write(&new_body, b"new").await.unwrap();
+
+        cache
+            .store(CacheStoreRequest {
+                key: "GET http://example.com/old".into(),
+                method: "GET".into(),
+                url: "http://example.com/old".into(),
+                status: 200,
+                headers: vec![],
+                body_path: Some(old_body.to_string_lossy().to_string()),
+                body_size: 3,
+                created_at: now_unix() - 5,
+                expires_at: now_unix() + 60,
+            })
+            .await
+            .unwrap();
+        cache
+            .store(CacheStoreRequest {
+                key: "GET http://example.com/new".into(),
+                method: "GET".into(),
+                url: "http://example.com/new".into(),
+                status: 200,
+                headers: vec![],
+                body_path: Some(new_body.to_string_lossy().to_string()),
+                body_size: 3,
+                created_at: now_unix(),
+                expires_at: now_unix() + 60,
+            })
+            .await
+            .unwrap();
+
+        assert!(cache.get("GET", "http://example.com/old").await.unwrap().is_none());
+        assert!(cache.get("GET", "http://example.com/new").await.unwrap().is_some());
+        assert!(!old_body.exists());
+        assert!(new_body.exists());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn sqlite_cache_invalidates_dangling_body_path() {
+        clear_cache_dir();
+
+        let config = CacheConfig {
+            enabled: true,
+            ..CacheConfig::default()
+        };
+        let cache = SqliteCache::new(&config).await.unwrap();
+        let missing_body = cache_objects_dir(cache.cache_dir()).join("missing-body");
+
+        cache
+            .store(CacheStoreRequest {
+                key: "GET http://example.com/missing".into(),
+                method: "GET".into(),
+                url: "http://example.com/missing".into(),
+                status: 200,
+                headers: vec![],
+                body_path: Some(missing_body.to_string_lossy().to_string()),
+                body_size: 10,
+                created_at: now_unix(),
+                expires_at: now_unix() + 60,
+            })
+            .await
+            .unwrap();
+
+        assert!(cache.get("GET", "http://example.com/missing").await.unwrap().is_none());
     }
 }

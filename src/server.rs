@@ -13,11 +13,12 @@ use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioIo;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
@@ -31,15 +32,18 @@ struct AppState {
     config: Arc<Config>,
     policy: Arc<PolicyEngine>,
     cache: Arc<dyn Cache>,
+    rate_limiter: Arc<IpRateLimiter>,
 }
 
 impl AppState {
     fn new(config: Arc<Config>, cache: Arc<dyn Cache>) -> Self {
         let policy = Arc::new(PolicyEngine::new(&config.policy));
+        let rate_limiter = Arc::new(IpRateLimiter::default());
         Self {
             config,
             policy,
             cache,
+            rate_limiter,
         }
     }
 }
@@ -162,8 +166,15 @@ async fn handle_request(
 
         tracing::debug!(headers = ?request_headers, "request details");
 
-        if state.config.limits.per_ip_rps == 0 {
-            tracing::warn!("per_ip_rps is 0; all requests will be effectively denied");
+        if let Err(err) = enforce_request_limits(
+            &req,
+            peer_addr.ip(),
+            state.config.limits.max_header_bytes,
+            state.config.limits.per_ip_rps,
+            &state.rate_limiter,
+        ) {
+            tracing::warn!(error = %err, "request limit enforcement rejected request");
+            return err.to_response();
         }
 
         let result = match method {
@@ -230,6 +241,76 @@ fn redact_headers_for_logging(
             Some((name_string, value_string))
         })
         .collect()
+}
+
+fn enforce_request_limits<B>(
+    req: &Request<B>,
+    client_ip: IpAddr,
+    max_header_bytes: usize,
+    per_ip_rps: u32,
+    rate_limiter: &IpRateLimiter,
+) -> Result<(), ProxyError> {
+    if estimate_request_header_bytes(req) > max_header_bytes {
+        return Err(ProxyError::HeaderTooLarge);
+    }
+
+    if per_ip_rps == 0 || !rate_limiter.allow(client_ip, per_ip_rps) {
+        return Err(ProxyError::TooManyRequests);
+    }
+
+    Ok(())
+}
+
+fn estimate_request_header_bytes<B>(req: &Request<B>) -> usize {
+    let request_line_bytes = req.method().as_str().len() + 1 + req.uri().to_string().len() + 10;
+    let headers_bytes: usize = req
+        .headers()
+        .iter()
+        .map(|(name, value)| name.as_str().len() + value.as_bytes().len() + 4)
+        .sum();
+    request_line_bytes + headers_bytes + 2
+}
+
+#[derive(Default)]
+struct IpRateLimiter {
+    windows: Mutex<HashMap<IpAddr, RateWindow>>,
+}
+
+#[derive(Clone, Copy)]
+struct RateWindow {
+    second: u64,
+    count: u32,
+}
+
+impl IpRateLimiter {
+    fn allow(&self, client_ip: IpAddr, per_ip_rps: u32) -> bool {
+        let now_second = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut windows = match self.windows.lock() {
+            Ok(windows) => windows,
+            Err(err) => err.into_inner(),
+        };
+
+        let entry = windows.entry(client_ip).or_insert(RateWindow {
+            second: now_second,
+            count: 0,
+        });
+
+        if entry.second != now_second {
+            entry.second = now_second;
+            entry.count = 0;
+        }
+
+        if entry.count >= per_ip_rps {
+            return false;
+        }
+
+        entry.count += 1;
+        true
+    }
 }
 
 struct TimedBody<B> {
@@ -327,6 +408,7 @@ where
 mod tests {
     use super::*;
     use hyper::header::{AUTHORIZATION, COOKIE, HeaderValue};
+    use hyper::Request;
 
     #[test]
     fn redacts_configured_headers_for_logging() {
@@ -343,5 +425,27 @@ mod tests {
         assert!(redacted.contains(&("authorization".into(), "<redacted>".into())));
         assert!(redacted.contains(&("cookie".into(), "<redacted>".into())));
         assert!(redacted.contains(&("x-test".into(), "value".into())));
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_blocks_after_limit_within_same_second() {
+        let limiter = IpRateLimiter::default();
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+
+        assert!(limiter.allow(ip, 1));
+        assert!(!limiter.allow(ip, 1));
+    }
+
+    #[test]
+    fn estimates_request_header_bytes() {
+        let req = Request::builder()
+            .method("GET")
+            .uri("http://example.com/asset")
+            .header("host", "example.com")
+            .header("x-test", "value")
+            .body(())
+            .unwrap();
+
+        assert!(estimate_request_header_bytes(&req) > 0);
     }
 }

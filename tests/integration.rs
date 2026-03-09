@@ -202,6 +202,30 @@ async fn policy_denied_requests_return_forbidden() {
 }
 
 #[tokio::test]
+async fn policy_denied_ports_return_forbidden() {
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![18080];
+    config.policy.denied_ports = vec![18080];
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let uri: Uri = "http://127.0.0.1:18080/denied-port".parse().unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("port denied"));
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
 async fn http_proxy_forwards_post_body() {
     let (upstream_addr, upstream_rx) = spawn_upstream().await;
     let mut config = Config::default();
@@ -293,6 +317,63 @@ async fn upstream_connect_failure_returns_error_response() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&body).contains("io error"));
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn per_ip_rate_limit_returns_too_many_requests() {
+    let (upstream_addr, _upstream_rx) = spawn_upstream().await;
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+    config.limits.per_ip_rps = 1;
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let uri: Uri = format!("http://{}/limited", upstream_addr).parse().unwrap();
+    let first = Request::builder()
+        .method("GET")
+        .uri(uri.clone())
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+    let second = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, first).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = send_request_via_proxy(proxy_addr, second).await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("too many requests"));
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn oversized_request_headers_return_431() {
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![80];
+    config.limits.max_header_bytes = 80;
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("http://example.com/")
+        .header("x-large", "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz")
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("request header too large"));
 
     proxy_handle.abort();
 }

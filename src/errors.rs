@@ -25,6 +25,10 @@ pub enum ProxyError {
     Http(#[from] hyper::Error),
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("request header too large")]
+    HeaderTooLarge,
+    #[error("too many requests")]
+    TooManyRequests,
     #[error("policy denied: {0}")]
     PolicyDenied(String),
     #[error("upstream connect failed: {0}")]
@@ -39,6 +43,8 @@ impl ProxyError {
     pub fn status_code(&self) -> StatusCode {
         match self {
             ProxyError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ProxyError::HeaderTooLarge => StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+            ProxyError::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             ProxyError::PolicyDenied(_) => StatusCode::FORBIDDEN,
             ProxyError::UpstreamConnect(_) => StatusCode::BAD_GATEWAY,
             ProxyError::Timeout => StatusCode::GATEWAY_TIMEOUT,

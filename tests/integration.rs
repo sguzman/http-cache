@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use http_body::{Body, Frame, SizeHint};
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
@@ -7,6 +8,8 @@ use hyper_util::rt::TokioIo;
 use httpcache::config::Config;
 use httpcache::server::serve;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{oneshot, Mutex};
@@ -19,7 +22,69 @@ struct UpstreamCapture {
     body: Bytes,
 }
 
+struct SlowBody {
+    chunks: Vec<Bytes>,
+    next_chunk: usize,
+    delay: std::time::Duration,
+    sleep: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl SlowBody {
+    fn new(chunks: Vec<Bytes>, delay: std::time::Duration) -> Self {
+        Self {
+            chunks,
+            next_chunk: 0,
+            delay,
+            sleep: None,
+        }
+    }
+}
+
+impl Body for SlowBody {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        if self.next_chunk >= self.chunks.len() {
+            return Poll::Ready(None);
+        }
+
+        if self.sleep.is_none() {
+            self.sleep = Some(Box::pin(tokio::time::sleep(self.delay)));
+        }
+
+        if let Some(sleep) = self.sleep.as_mut() {
+            if sleep.as_mut().poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+        }
+
+        self.sleep = None;
+        let chunk = self.chunks[self.next_chunk].clone();
+        self.next_chunk += 1;
+        Poll::Ready(Some(Ok(Frame::data(chunk))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.next_chunk >= self.chunks.len()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        let total = self.chunks.iter().map(|chunk| chunk.len() as u64).sum::<u64>();
+        SizeHint::with_exact(total)
+    }
+}
+
 async fn spawn_upstream() -> (SocketAddr, oneshot::Receiver<UpstreamCapture>) {
+    spawn_upstream_with_delay(std::time::Duration::from_millis(0)).await
+}
+
+async fn spawn_upstream_with_delay(
+    response_delay: std::time::Duration,
+) -> (SocketAddr, oneshot::Receiver<UpstreamCapture>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (tx, rx) = oneshot::channel();
@@ -29,6 +94,7 @@ async fn spawn_upstream() -> (SocketAddr, oneshot::Receiver<UpstreamCapture>) {
         let (stream, _) = listener.accept().await.unwrap();
         let service = service_fn(move |req: Request<Incoming>| {
             let tx = tx.clone();
+            let response_delay = response_delay;
             async move {
                 let (parts, body) = req.into_parts();
                 let body = body.collect().await.unwrap().to_bytes();
@@ -44,6 +110,9 @@ async fn spawn_upstream() -> (SocketAddr, oneshot::Receiver<UpstreamCapture>) {
                 };
                 if let Some(sender) = tx.lock().await.take() {
                     let _ = sender.send(capture);
+                }
+                if !response_delay.is_zero() {
+                    tokio::time::sleep(response_delay).await;
                 }
                 Ok::<_, hyper::Error>(Response::new(
                     Full::new(Bytes::from_static(b"ok")),
@@ -112,10 +181,14 @@ async fn http_proxy_forwards_origin_form() {
     proxy_handle.abort();
 }
 
-async fn send_request_via_proxy(
+async fn send_request_via_proxy<B>(
     proxy_addr: SocketAddr,
-    req: Request<Empty<Bytes>>,
-) -> Response<Incoming> {
+    req: Request<B>,
+) -> Response<Incoming>
+where
+    B: http_body::Body<Data = Bytes> + Send + 'static,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     let stream = TcpStream::connect(proxy_addr).await.unwrap();
     let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
@@ -235,10 +308,11 @@ async fn http_proxy_forwards_post_body() {
     let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
 
     let uri: Uri = format!("http://{}/submit", upstream_addr).parse().unwrap();
+    let payload = Bytes::from_static(b"payload-body");
     let req = Request::builder()
         .method(Method::POST)
         .uri(uri)
-        .body(Empty::<Bytes>::new())
+        .body(Full::new(payload.clone()))
         .unwrap();
 
     let response = send_request_via_proxy(proxy_addr, req).await;
@@ -248,7 +322,7 @@ async fn http_proxy_forwards_post_body() {
     let capture = upstream_rx.await.unwrap();
     assert_eq!(capture.method, "POST");
     assert_eq!(capture.uri, "/submit");
-    assert!(capture.body.is_empty());
+    assert_eq!(capture.body, payload);
 
     proxy_handle.abort();
 }
@@ -374,6 +448,119 @@ async fn oversized_request_headers_return_431() {
     assert_eq!(response.status(), StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&body).contains("request header too large"));
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn oversized_request_body_returns_413() {
+    let (upstream_addr, _upstream_rx) = spawn_upstream().await;
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+    config.limits.max_request_body_bytes = 8;
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let uri: Uri = format!("http://{}/upload", upstream_addr).parse().unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .body(Full::new(Bytes::from_static(b"payload-too-large")))
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("request body too large"));
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn proxy_handles_slow_upstream_responses() {
+    let (upstream_addr, upstream_rx) =
+        spawn_upstream_with_delay(std::time::Duration::from_millis(75)).await;
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let uri: Uri = format!("http://{}/slow", upstream_addr).parse().unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Empty::<Bytes>::new())
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body, Bytes::from_static(b"ok"));
+
+    let capture = upstream_rx.await.unwrap();
+    assert_eq!(capture.method, "GET");
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn http_proxy_forwards_large_post_body() {
+    let (upstream_addr, upstream_rx) = spawn_upstream().await;
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let payload = Bytes::from(vec![b'z'; 262_144]);
+    let uri: Uri = format!("http://{}/large-upload", upstream_addr).parse().unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .body(Full::new(payload.clone()))
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response.into_body().collect().await.unwrap();
+
+    let capture = upstream_rx.await.unwrap();
+    assert_eq!(capture.method, "POST");
+    assert_eq!(capture.body.len(), payload.len());
+    assert_eq!(capture.body, payload);
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn proxy_handles_slow_client_request_body() {
+    let (upstream_addr, upstream_rx) = spawn_upstream().await;
+    let mut config = Config::default();
+    config.policy.allowed_domains = vec!["*".to_string()];
+    config.policy.allowed_ports = vec![upstream_addr.port()];
+    config.limits.max_request_body_bytes = 1024;
+
+    let (proxy_addr, proxy_handle) = spawn_proxy(config).await;
+
+    let chunks = vec![Bytes::from_static(b"slow-"), Bytes::from_static(b"client-body")];
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("http://{}/slow-client", upstream_addr))
+        .body(SlowBody::new(
+            chunks.clone(),
+            std::time::Duration::from_millis(20),
+        ))
+        .unwrap();
+
+    let response = send_request_via_proxy(proxy_addr, req).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response.into_body().collect().await.unwrap();
+
+    let capture = upstream_rx.await.unwrap();
+    assert_eq!(capture.method, "POST");
+    assert_eq!(capture.body, Bytes::from_static(b"slow-client-body"));
 
     proxy_handle.abort();
 }

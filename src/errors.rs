@@ -27,6 +27,8 @@ pub enum ProxyError {
     BadRequest(String),
     #[error("request header too large")]
     HeaderTooLarge,
+    #[error("request body too large")]
+    RequestBodyTooLarge,
     #[error("too many requests")]
     TooManyRequests,
     #[error("policy denied: {0}")]
@@ -44,6 +46,7 @@ impl ProxyError {
         match self {
             ProxyError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ProxyError::HeaderTooLarge => StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+            ProxyError::RequestBodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ProxyError::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             ProxyError::PolicyDenied(_) => StatusCode::FORBIDDEN,
             ProxyError::UpstreamConnect(_) => StatusCode::BAD_GATEWAY,
@@ -79,5 +82,11 @@ impl ProxyError {
 impl From<tokio::time::error::Elapsed> for ProxyError {
     fn from(_: tokio::time::error::Elapsed) -> Self {
         ProxyError::Timeout
+    }
+}
+
+impl From<Infallible> for ProxyError {
+    fn from(_: Infallible) -> Self {
+        ProxyError::Internal
     }
 }

@@ -27,7 +27,7 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [x] Real per-IP rate limiting enforcement
 - [x] True header byte-size limit enforcement
 - [ ] Graceful shutdown flow for listener and in-flight requests
-- [ ] Request body size limits
+- [x] Request body size limits
 - [ ] Circuit breaking or overload protection beyond max connections
 
 ## Caching Foundation
@@ -177,7 +177,7 @@ This roadmap reflects the current state of the codebase as audited on March 8, 2
 - [ ] Add integration tests for concurrent requests across many cache keys
 - [x] Add integration tests for error responses, malformed requests, and upstream failures
 - [x] Add integration tests for policy-denied hosts and ports
-- [ ] Add integration tests for large payloads, slow upstreams, and slow clients
+- [x] Add integration tests for large payloads, slow upstreams, and slow clients
 - [ ] Add integration tests for shutdown and restart behavior
 - [ ] Add integration tests for dev-mode logging and cache reset behavior
 - [ ] Add integration tests for prod-mode persistence behavior

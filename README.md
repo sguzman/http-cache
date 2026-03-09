@@ -19,6 +19,7 @@ M1, M2, and a meaningful M4 slice are implemented in this workspace, with tests.
   - LRU-style eviction by `last_access`
   - Cache replay, expiry handling, and invalidation of missing body files
   - Structured logging with request timing, request ID control, and header redaction
+  - Request header and body size enforcement
 - Not implemented:
   - Reverse proxy routing
   - HTTPS asset caching through TLS termination or interception
@@ -31,6 +32,7 @@ M1, M2, and a meaningful M4 slice are implemented in this workspace, with tests.
 - Cache expiry currently uses local TTL plus `Cache-Control: no-store`, `no-cache`, `max-age`, and `Expires`.
 - Range requests and `206 Partial Content` responses bypass caching.
 - HEAD responses are cached as metadata-only entries and replay without a body.
+- Request bodies are rejected when they exceed the configured limit.
 - HTTPS traffic carried through CONNECT is not decrypted, so HTTPS asset bodies are not cacheable in the current architecture.
 
 ## Layout
@@ -58,6 +60,7 @@ M1, M2, and a meaningful M4 slice are implemented in this workspace, with tests.
 ## Notes
 - CONNECT tunnels create a TCP pipe; no TLS interception.
 - Streaming is end-to-end; bodies are not buffered.
+- Request headers and request bodies are rejected when they exceed configured limits.
 - Hop-by-hop headers and Proxy-Authorization are stripped before forwarding.
 - Cache uses SQLite metadata in `.cache/cache.sqlite` with LRU eviction, and stores bodies under `.cache/objects/`.
 - In dev mode the process clears `.cache` on startup.

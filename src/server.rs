@@ -187,6 +187,7 @@ async fn handle_request(
                     &state.policy,
                     state.cache.clone(),
                     connect_timeout,
+                    state.config.limits.max_request_body_bytes,
                     state.config.caching.clone(),
                 )
                 .await

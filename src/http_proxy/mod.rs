@@ -3,11 +3,15 @@ use crate::config::CacheConfig;
 use crate::errors::{ProxyBody, ProxyError};
 use crate::headers::strip_hop_by_hop;
 use crate::policy::PolicyEngine;
+use bytes::Bytes;
+use http_body::{Body, Frame, SizeHint};
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 use tracing::Instrument;
@@ -23,6 +27,7 @@ pub async fn handle_http(
     policy: &PolicyEngine,
     cache: Arc<dyn Cache>,
     connect_timeout: Duration,
+    max_request_body_bytes: u64,
     cache_config: CacheConfig,
 ) -> Result<Response<ProxyBody>, ProxyError> {
     let method = req.method().clone();
@@ -50,6 +55,7 @@ pub async fn handle_http(
     }
 
     strip_hop_by_hop(req.headers_mut());
+    let req = wrap_limited_request_body(req, max_request_body_bytes)?;
 
     let addr = format!("{}:{}", target.host, target.port);
     let stream = timeout(connect_timeout, TcpStream::connect(addr))
@@ -175,4 +181,119 @@ pub async fn handle_http(
         parts,
         body.map_err(ProxyError::from).boxed(),
     ))
+}
+
+fn wrap_limited_request_body<B>(
+    req: Request<B>,
+    max_request_body_bytes: u64,
+) -> Result<Request<LimitedBody<B>>, ProxyError>
+where
+    B: Body<Data = Bytes>,
+{
+    if let Some(content_length) = req
+        .headers()
+        .get(hyper::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        if content_length > max_request_body_bytes {
+            return Err(ProxyError::RequestBodyTooLarge);
+        }
+    }
+
+    Ok(req.map(|body| LimitedBody::new(body, max_request_body_bytes)))
+}
+
+#[derive(Debug)]
+struct LimitedBody<B> {
+    inner: B,
+    max_bytes: u64,
+    seen_bytes: u64,
+}
+
+impl<B> LimitedBody<B> {
+    fn new(inner: B, max_bytes: u64) -> Self {
+        Self {
+            inner,
+            max_bytes,
+            seen_bytes: 0,
+        }
+    }
+}
+
+impl<B> Body for LimitedBody<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    ProxyError: From<B::Error>,
+{
+    type Data = Bytes;
+    type Error = ProxyError;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        match Pin::new(&mut self.inner).poll_frame(cx) {
+            Poll::Ready(Some(Ok(frame))) => {
+                if let Some(data) = frame.data_ref() {
+                    self.seen_bytes = self.seen_bytes.saturating_add(data.len() as u64);
+                    if self.seen_bytes > self.max_bytes {
+                        return Poll::Ready(Some(Err(ProxyError::RequestBodyTooLarge)));
+                    }
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(ProxyError::from(err)))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::{Empty, Full};
+    use hyper::Request;
+
+    #[test]
+    fn wrap_limited_request_body_rejects_large_content_length() {
+        let req = Request::builder()
+            .method("POST")
+            .uri("http://example.com/upload")
+            .header("content-length", "11")
+            .body(Full::new(Bytes::from_static(b"hello world")))
+            .unwrap();
+
+        let err = wrap_limited_request_body(req, 10).unwrap_err();
+        assert!(matches!(err, ProxyError::RequestBodyTooLarge));
+    }
+
+    #[tokio::test]
+    async fn limited_body_allows_small_payloads() {
+        let mut body = LimitedBody::new(Full::new(Bytes::from_static(b"ok")), 8);
+        let frame = BodyExt::frame(&mut body).await.unwrap().unwrap();
+        assert_eq!(frame.into_data().unwrap(), Bytes::from_static(b"ok"));
+    }
+
+    #[tokio::test]
+    async fn limited_body_rejects_payloads_that_exceed_limit() {
+        let mut body = LimitedBody::new(Full::new(Bytes::from(vec![b'x'; 16])), 8);
+        let result = BodyExt::frame(&mut body).await.unwrap();
+        assert!(matches!(result, Err(ProxyError::RequestBodyTooLarge)));
+    }
+
+    #[tokio::test]
+    async fn limited_body_handles_empty_payloads() {
+        let mut body = LimitedBody::new(Empty::<Bytes>::new(), 1);
+        assert!(BodyExt::frame(&mut body).await.is_none());
+    }
 }

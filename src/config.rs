@@ -62,6 +62,12 @@ impl Config {
             ));
         }
 
+        if self.limits.max_request_body_bytes == 0 {
+            return Err(ProxyError::ConfigValidation(
+                "limits.max_request_body_bytes must be greater than 0".to_string(),
+            ));
+        }
+
         if self.limits.connect_timeout_ms == 0 {
             return Err(ProxyError::ConfigValidation(
                 "limits.connect_timeout_ms must be greater than 0".to_string(),
@@ -224,6 +230,7 @@ impl Default for CacheConfig {
 #[serde(default)]
 pub struct LimitsConfig {
     pub max_header_bytes: usize,
+    pub max_request_body_bytes: u64,
     pub max_connections: usize,
     pub per_ip_rps: u32,
     pub connect_timeout_ms: u64,
@@ -234,6 +241,7 @@ impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             max_header_bytes: 32_768,
+            max_request_body_bytes: 10_485_760,
             max_connections: 1024,
             per_ip_rps: 50,
             connect_timeout_ms: 5_000,
@@ -291,6 +299,17 @@ mod tests {
         assert!(err
             .to_string()
             .contains("limits.max_connections must be greater than 0"));
+    }
+
+    #[test]
+    fn validation_rejects_zero_request_body_limit() {
+        let mut config = Config::default();
+        config.limits.max_request_body_bytes = 0;
+
+        let err = config.validate().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("limits.max_request_body_bytes must be greater than 0"));
     }
 
     #[test]
